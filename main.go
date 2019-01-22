@@ -33,75 +33,73 @@ func main(){
 		panic(err)
 	}
 
+	height := 0
+	fmt.Print("Please enter a block height: ")
+
+	if _, err := fmt.Scanf("%d\n", &height); err != nil {
+		panic(err)
+	}
+
+	// Get block header
+	header, err := socket.blockchainBlockHeader(height)
+	if err != nil {
+		panic(err)
+	}
+
+	if len(header) != 160 {
+		panic("Invalid header received by server")
+	}
+
+	headerBs, err := hex.DecodeString(header)
+	if err != nil {
+		panic(err)
+	}
+
+	merkleRoot := headerBs[36:68]
+
+	fmt.Printf("  Got the merkle root hash: %x\n", reverse(merkleRoot))
+
 	for {
-		height := 0
-		fmt.Print("Please enter a block height: ")
+		txhashHex := ""
 
-		if _, err := fmt.Scanf("%d", &height); err != nil {
+		fmt.Print("  Please enter a transaction id: ")
+		if _, err := fmt.Scanf("%s\n", &txhashHex); err != nil {
 			panic(err)
 		}
 
-		// Get block header
-		header, err := socket.blockchainBlockHeader(height)
+		fmt.Println("    Requesting SPV (merkle tree proof)")
+
+		merkleProofHex, pos, err := socket.blockchainTransactionGetMerkle(height, txhashHex)
 		if err != nil {
 			panic(err)
 		}
 
-		if len(header) != 160 {
-			panic("Invalid header received by server")
-		}
-
-		headerBs, err := hex.DecodeString(header)
+		txhash, err := hex.DecodeString(txhashHex)
 		if err != nil {
 			panic(err)
 		}
+		txhash = reverse(txhash)
 
-		merkleRoot := headerBs[36:68]
-
-		fmt.Printf("  Got the merkle root hash: %x\n", reverse(merkleRoot))
-
-		for {
-			txhashHex := ""
-
-			fmt.Print("  Please enter a transaction id: ")
-			if _, err := fmt.Scanf("%s", &txhashHex); err != nil {
-				panic(err)
-			}
-
-			fmt.Println("    Requesting SPV (merkle tree proof)")
-
-			merkleProofHex, pos, err := socket.blockchainTransactionGetMerkle(height, txhashHex)
+		merkleProof := make([][]byte, len(merkleProofHex))
+		for i := 0; i < len(merkleProofHex); i++ {
+			merkleProof[i], err = hex.DecodeString(merkleProofHex[i])
 			if err != nil {
 				panic(err)
 			}
+		}
 
-			txhash, err := hex.DecodeString(txhashHex)
-			if err != nil {
-				panic(err)
+		fmt.Printf("    The server said that the entered transaction is #%d in the block, let's better check that!\n", pos + 1)
+		correct, isLast := checkProof(pos, merkleRoot, txhash, merkleProof)
+		if correct {
+			fmt.Printf("    Yeah, that's actually correct, this transaction is #%d in the block!\n", pos + 1)
+			if pos == 0 {
+				fmt.Println("    Also, the transaction is the first transaction in the block!")
 			}
-			txhash = reverse(txhash)
-
-			merkleProof := make([][]byte, len(merkleProofHex))
-			for i := 0; i < len(merkleProofHex); i++ {
-				merkleProof[i], err = hex.DecodeString(merkleProofHex[i])
-				if err != nil {
-					panic(err)
-				}
+			if isLast {
+				fmt.Println("    Also, the transaction is the last transaction in the block!")
 			}
-
-			fmt.Printf("    The server said that the entered transaction is #%d in the block, let's better check that!\n", pos + 1)
-			correct, isLast := checkProof(pos, merkleRoot, txhash, merkleProof)
-			if correct {
-				fmt.Printf("    Yeah, that's actually correct, this transaction is #%d in the block!\n", pos + 1)
-				if pos == 0 {
-					fmt.Println("    Also, the transaction is the first transaction in the block!")
-				}
-				if isLast {
-					fmt.Println("    Also, the transaction is the last transaction in the block!")
-				}
-			} else {
-				fmt.Println("    Looks like that's not correct, someone tries to trick us!")
-			}
+		} else {
+			fmt.Println("    Looks like that's not correct, someone tries to trick us!")
 		}
 	}
 }
@@ -113,6 +111,9 @@ func checkProof(pos int, root, txhash []byte, merkle [][]byte) (correct, isLast 
 	for i := uint(0); i < uint(len(merkle)); i++ {
 		if (pos >> i) % 2 == 1 {
 			state = sha256dCat(reverse(merkle[i]), state)
+			if equal(state, reverse(merkle[i])) {
+				return false, false
+			}
 		} else {
 			if !equal(state, reverse(merkle[i])) {
 				isLast = false
